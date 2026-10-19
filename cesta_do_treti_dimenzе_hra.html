@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cesta do třetí dimenze</title>
+<style>
+html,body{margin:0;background:#10151b;color:#fff;font-family:Arial,sans-serif;overflow:hidden}
+#wrap{position:relative;width:100vw;height:100vh;display:flex;align-items:center;justify-content:center}
+canvas{background:#18221b;border:2px solid #d7a83d;box-shadow:0 0 30px #000;max-width:100vw;max-height:100vh}
+#help{position:absolute;left:12px;bottom:10px;background:#000b;padding:8px 12px;border-radius:8px;font-size:14px}
+#msg{position:absolute;top:12px;left:50%;transform:translateX(-50%);background:#000c;padding:10px 18px;border:1px solid #d7a83d;border-radius:8px;text-align:center}
+</style>
+</head>
+<body>
+<div id="wrap">
+<canvas id="game" width="1200" height="760"></canvas>
+<div id="msg">Najdi portál do třetí dimenze!</div>
+<div id="help">Šipky/WASD = pohyb · W = útok · Mezerník = skok · P = pauza · R = restart</div>
+</div>
+<script>
+const c=document.getElementById('game'),x=c.getContext('2d'),msg=document.getElementById('msg');
+const W=c.width,H=c.height;
+let keys={},paused=false,won=false;
+let player={x:70,y:650,r:15,hp:5,diam:0,atk:0,inv:0};
+let cam={x:0,y:0};
+const world={w:2400,h:1500};
+
+const regions=[
+ {name:'Zelený les',x:0,y:0,w:800,h:500,col:'#28552d'},
+ {name:'Zasněžené hory',x:800,y:0,w:800,h:500,col:'#b8d5dc'},
+ {name:'Pouštní krajina',x:1600,y:0,w:800,h:500,col:'#b88b43'},
+ {name:'Bažiny',x:0,y:500,w:800,h:500,col:'#31584c'},
+ {name:'Ztracené ruiny',x:800,y:500,w:800,h:500,col:'#45424d'},
+ {name:'Ohnivá pekelná země',x:1600,y:500,w:800,h:500,col:'#5a2920'},
+ {name:'Temný les',x:0,y:1000,w:800,h:500,col:'#162b24'},
+ {name:'Komnata hádanek',x:800,y:1000,w:800,h:500,col:'#66502d'},
+ {name:'Portál do třetí dimenze',x:1600,y:1000,w:800,h:500,col:'#17243b'}
+];
+
+let diamonds=[], enemies=[], traps=[], walls=[], chests=[], puzzles=[];
+function diamond(px,py){diamonds.push({x:px,y:py,taken:false})}
+function enemy(px,py,type=0){enemies.push({x:px,y:py,hp:type?3:2,r:17,type,dead:false,cd:0})}
+function trap(px,py){traps.push({x:px,y:py,r:22,hit:false})}
+function wall(px,py,w,h){walls.push({x:px,y:py,w,h})}
+function chest(px,py){chests.push({x:px,y:py,open:false})}
+function puzzle(px,py){puzzles.push({x:px,y:py,solved:false})}
+
+for(let i=0;i<100;i++){
+  let rx=(i*233)%2320+40, ry=(i*97)%1400+50;
+  diamond(rx,ry);
+}
+[
+ [250,170],[520,320],[1040,180],[1350,350],[1840,180],[2200,300],
+ [240,700],[600,850],[950,650],[1370,830],[1780,680],[2160,850],
+ [250,1200],[610,1380],[950,1220],[1400,1370],[1810,1180],[2200,1330]
+].forEach(p=>enemy(p[0],p[1],(p[0]>1550?1:0)));
+[
+ [400,240],[680,430],[920,260],[1260,420],[1740,260],[2050,410],
+ [300,620],[700,900],[1080,580],[1460,920],[1730,620],[2260,760],
+ [430,1100],[700,1370],[980,1120],[1450,1260],[1880,1110],[2250,1230]
+].forEach(p=>trap(p[0],p[1]));
+[
+ [360,100,170,24],[650,260,25,150],[980,350,190,24],[1260,120,24,170],
+ [1720,350,190,24],[2040,110,24,170],[250,800,200,24],[610,600,24,180],
+ [900,760,190,24],[1280,580,24,170],[1780,780,190,24],[2070,560,24,170],
+ [330,1250,190,24],[650,1110,24,170],[950,1360,180,24],[1320,1110,24,170]
+].forEach(a=>wall(...a));
+[[180,400],[560,90],[1120,440],[1460,210],[1880,440],[2260,150],[120,920],[720,720],[1160,690],[1460,900],[520,1450],[1180,1180]].forEach(p=>chest(...p));
+[[720,1200],[1450,1170],[1100,900]].forEach(p=>puzzle(...p));
+
+const portal={x:2150,y:1260,r:55};
+function reset(){
+ player={x:70,y:650,r:15,hp:5,diam:0,atk:0,inv:0}; won=false; paused=false;
+ diamonds.forEach(d=>d.taken=false); enemies.forEach(e=>{e.dead=false;e.hp=e.type?3:2;e.cd=0});
+ traps.forEach(t=>t.hit=false); chests.forEach(q=>q.open=false); puzzles.forEach(q=>q.solved=false);
+ msg.textContent='Najdi portál do třetí dimenze!';
+}
+function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y)}
+function blocked(nx,ny){
+ if(nx<15||ny<15||nx>world.w-15||ny>world.h-15)return true;
+ for(const w of walls) if(nx+15>w.x&&nx-15<w.x+w.w&&ny+15>w.y&&ny-15<w.y+w.h)return true;
+ return false;
+}
+function attack(){
+ if(player.atk>0)return;
+ player.atk=18;
+ for(const e of enemies) if(!e.dead && dist(player,e)<55){
+   e.hp--; e.x+=(e.x-player.x)*.12; e.y+=(e.y-player.y)*.12;
+   if(e.hp<=0)e.dead=true;
+ }
+}
+addEventListener('keydown',e=>{
+ keys[e.key.toLowerCase()]=true;
+ if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key))e.preventDefault();
+ if(e.key.toLowerCase()==='w')attack();
+ if(e.key.toLowerCase()==='p')paused=!paused;
+ if(e.key.toLowerCase()==='r')reset();
+});
+addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
+
+function update(){
+ if(paused||won)return;
+ let dx=(keys.arrowright||keys.d?1:0)-(keys.arrowleft||keys.a?1:0);
+ let dy=(keys.arrowdown||keys.s?1:0)-(keys.arrowup||keys.w?1:0);
+ // W is attack, so movement uses arrows/WASD except W when pressed alone.
+ if(keys.w && !(keys.a||keys.s||keys.d||keys.arrowleft||keys.arrowright||keys.arrowup||keys.arrowdown))dy=-1;
+ let len=Math.hypot(dx,dy)||1, sp=3.4;
+ if(keys[' '])sp=5;
+ let nx=player.x+dx/len*sp,ny=player.y+dy/len*sp;
+ if(!blocked(nx,player.y))player.x=nx;
+ if(!blocked(player.x,ny))player.y=ny;
+ if(player.atk>0)player.atk--;
+ if(player.inv>0)player.inv--;
+
+ for(const d of diamonds) if(!d.taken&&dist(player,d)<25){d.taken=true;player.diam++;msg.textContent=`Diamant získán! ${player.diam}/100`;}
+ for(const q of chests) if(!q.open&&dist(player,q)<30){q.open=true; if(player.diam<100)player.diam++; msg.textContent='Truhla otevřena: +1 bod!';}
+ for(const p of puzzles) if(!p.solved&&dist(player,p)<40 && keys.enter){p.solved=true;msg.textContent='Hádanka vyřešena! Cesta je volná.';}
+ for(const t of traps) if(dist(player,t)<t.r && player.inv<=0){player.hp--;player.inv=70;t.hit=true;msg.textContent='Pozor! Skrytá past tě zasáhla!';}
+ for(const e of enemies) if(!e.dead){
+   e.cd=Math.max(0,e.cd-1);
+   let d=dist(player,e);
+   if(d<260){e.x+=(player.x-e.x)/Math.max(d,1)*(e.type?1.0:.55);e.y+=(player.y-e.y)/Math.max(d,1)*(e.type?1.0:.55);}
+   if(d<32&&e.cd===0){player.hp--;player.inv=55;e.cd=50;msg.textContent='Nepřítel tě zasáhl!';}
+ }
+ if(player.hp<=0){msg.textContent='Konec hry! Stiskni R pro nový pokus.';paused=true;}
+ if(dist(player,portal)<portal.r){won=true;msg.textContent=`VÍTĚZSTVÍ! Portál nalezen — ${player.diam}/100 diamantů.`;}
+ cam.x=Math.max(0,Math.min(world.w-W,player.x-W/2));
+ cam.y=Math.max(0,Math.min(world.h-H/2,player.y-H/2));
+}
+function draw(){
+ x.clearRect(0,0,W,H);
+ x.save();x.translate(-cam.x,-cam.y);
+ for(const r of regions){x.fillStyle=r.col;x.fillRect(r.x,r.y,r.w,r.h);x.strokeStyle='#ffffff18';x.strokeRect(r.x,r.y,r.w,r.h);
+   x.fillStyle='#ffffffaa';x.font='bold 24px Arial';x.fillText(r.name,r.x+20,r.y+35);
+ }
+ // decorative water/paths
+ x.strokeStyle='#9a7439';x.lineWidth=18;x.lineCap='round';x.beginPath();x.moveTo(70,650);x.lineTo(400,650);x.lineTo(760,480);x.lineTo(950,500);x.lineTo(1200,700);x.lineTo(1500,800);x.lineTo(1750,1050);x.lineTo(2150,1260);x.stroke();
+ x.lineWidth=5;
+ for(const w of walls){x.fillStyle='#24252b';x.fillRect(w.x,w.y,w.w,w.h);x.strokeStyle='#777';x.strokeRect(w.x,w.y,w.w,w.h);}
+ for(const d of diamonds)if(!d.taken){x.fillStyle='#63e9ff';x.beginPath();x.moveTo(d.x,d.y-9);x.lineTo(d.x+9,d.y);x.lineTo(d.x,d.y+12);x.lineTo(d.x-9,d.y);x.closePath();x.fill();x.strokeStyle='#fff';x.stroke();}
+ for(const q of chests){x.fillStyle=q.open?'#6c5b3d':'#b88628';x.fillRect(q.x-14,q.y-10,28,20);x.strokeStyle='#f4d27b';x.strokeRect(q.x-14,q.y-10,28,20);}
+ for(const p of puzzles){x.fillStyle=p.solved?'#4d9b63':'#9a66d8';x.fillRect(p.x-14,p.y-14,28,28);x.fillStyle='#fff';x.font='bold 18px Arial';x.fillText('?',p.x-6,p.y+7);}
+ for(const t of traps){x.fillStyle=t.hit?'#555':'#aaa';for(let i=-1;i<=1;i++){x.beginPath();x.moveTo(t.x+i*13,t.y+10);x.lineTo(t.x+i*13+7,t.y-10);x.lineTo(t.x+i*13+14,t.y+10);x.fill();}}
+ for(const e of enemies)if(!e.dead){x.fillStyle=e.type?'#9b332e':'#4d8b43';x.beginPath();x.arc(e.x,e.y,e.r,0,Math.PI*2);x.fill();x.fillStyle='#fff';x.fillRect(e.x-7,e.y-4,4,4);x.fillRect(e.x+4,e.y-4,4,4);}
+ // portal
+ x.beginPath();x.arc(portal.x,portal.y,portal.r,0,Math.PI*2);x.fillStyle='#164c93';x.fill();x.strokeStyle='#66eaff';x.lineWidth=7;x.stroke();
+ x.beginPath();x.arc(portal.x,portal.y,portal.r-13,0,Math.PI*2);x.strokeStyle='#d7faff';x.lineWidth=3;x.stroke();
+ x.fillStyle='#fff';x.font='bold 18px Arial';x.fillText('PORTÁL',portal.x-36,portal.y+85);
+ // player
+ x.globalAlpha=player.inv>0 && Math.floor(player.inv/5)%2===0?.35:1;
+ x.fillStyle='#d8a06b';x.beginPath();x.arc(player.x,player.y,player.r,0,Math.PI*2);x.fill();
+ x.fillStyle='#2878c8';x.fillRect(player.x-12,player.y+8,24,17);
+ x.strokeStyle='#eee';x.lineWidth=5;x.beginPath();x.moveTo(player.x+8,player.y);x.lineTo(player.x+30,player.y-18);x.stroke();
+ if(player.atk>0){x.strokeStyle='#fff';x.lineWidth=6;x.beginPath();x.arc(player.x,player.y,42,-.9,.9);x.stroke();}
+ x.globalAlpha=1;x.restore();
+
+ // HUD
+ x.fillStyle='#000b';x.fillRect(0,0,W,54);x.fillStyle='#fff';x.font='bold 18px Arial';
+ x.fillText(`Diamanty: ${player.diam}/100`,20,33);
+ x.fillText(`Životy: ${'♥'.repeat(player.hp)}${'♡'.repeat(5-player.hp)}`,230,33);
+ x.fillText(`Cíl: najdi portál`,480,33);
+ if(paused){x.fillStyle='#000b';x.fillRect(0,0,W,H);x.fillStyle='#fff';x.font='bold 42px Arial';x.fillText('PAUZA',W/2-80,H/2);}
+ if(won){x.fillStyle='#000c';x.fillRect(0,0,W,H);x.fillStyle='#7ff';x.font='bold 42px Arial';x.fillText('VÍTĚZSTVÍ!',W/2-140,H/2-20);x.font='22px Arial';x.fillStyle='#fff';x.fillText(`Prošel jsi portálem. Skóre: ${player.diam}/100`,W/2-170,H/2+25);}
+}
+function loop(){update();draw();requestAnimationFrame(loop)} loop();
+</script>
+</body>
+</html>
